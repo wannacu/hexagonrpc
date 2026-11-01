@@ -31,6 +31,7 @@
 #include "interface/apps_std.h"
 #include "iobuffer.h"
 #include "listener.h"
+#include "sensor_registry.h"
 
 struct apps_std_ctx {
 	int rootfd;
@@ -150,6 +151,33 @@ static uint32_t apps_std_fseek(void *data,
 	return 0;
 }
 
+static uint32_t apps_std_fwrite(void *data,
+			       const struct fastrpc_io_buffer *inbufs,
+			       struct fastrpc_io_buffer *outbufs)
+{
+	struct apps_std_ctx *ctx = data;
+	const struct { uint32_t fd; uint32_t size; } *in = inbufs[0].p;
+	struct { uint32_t written; uint32_t is_eof; } *out = outbufs[0].p;
+	ssize_t ret;
+	if (in->size > inbufs[1].s)
+		return AEE_EBADPARM;
+	ret = hexagonfs_write(ctx->fds, in->fd, in->size, inbufs[1].p);
+	if (ret < 0)
+		return AEE_EFAILED;
+	out->written = ret;
+	out->is_eof = 0;
+	return 0;
+}
+
+static uint32_t apps_std_fremove(void *data,
+			        const struct fastrpc_io_buffer *inbufs,
+			        struct fastrpc_io_buffer *outbufs)
+{
+	if (inbufs[1].s == 0 || ((const char *)inbufs[1].p)[inbufs[1].s - 1] != 0)
+		return AEE_EBADPARM;
+	return sensor_registry_remove(inbufs[1].p) < 0 ? AEE_EFAILED : 0;
+}
+
 static uint32_t apps_std_fopen_with_env(void *data,
 					const struct fastrpc_io_buffer *inbufs,
 					struct fastrpc_io_buffer *outbufs)
@@ -166,10 +194,18 @@ static uint32_t apps_std_fopen_with_env(void *data,
 		return AEE_EBADPARM;
 
 	rw_mode = ((const char *) inbufs[4].p)[0];
-	if (rw_mode == 'w' || rw_mode == 'a') {
-		fprintf(stderr, "Tried to open %s for writing\n",
-				(const char *) inbufs[3].p);
-		return AEE_EUNSUPPORTED;
+	if (rw_mode == 'w' || rw_mode == 'a' || strchr(inbufs[4].p, '+')) {
+		fd = sensor_registry_open(inbufs[3].p, inbufs[4].p);
+		if (fd < 0) {
+			fprintf(stderr, "Registry open rejected for %s: %s\n",
+				(const char *)inbufs[3].p, strerror(-fd));
+			return AEE_EFAILED;
+		}
+		fd = hexagonfs_import_host_fd(ctx->fds, fd);
+		if (fd < 0)
+			return AEE_EFAILED;
+		*out = fd;
+		return 0;
 	}
 
 	if (!strcmp(inbufs[1].p, "ADSP_LIBRARY_PATH")) {
@@ -420,7 +456,7 @@ static const struct fastrpc_function_impl apps_std_procs[] = {
 		.def = &apps_std_fread_def,
 		.impl = apps_std_fread,
 	},
-	{ .def = NULL, .impl = NULL, },
+	{ .def = &apps_std_fwrite_def, .impl = apps_std_fwrite, },
 	{ .def = NULL, .impl = NULL, },
 	{ .def = NULL, .impl = NULL, },
 	{ .def = NULL, .impl = NULL, },
@@ -445,7 +481,7 @@ static const struct fastrpc_function_impl apps_std_procs[] = {
 	{ .def = NULL, .impl = NULL, },
 	{ .def = NULL, .impl = NULL, },
 	{ .def = NULL, .impl = NULL, },
-	{ .def = NULL, .impl = NULL, },
+	{ .def = &apps_std_fremove_def, .impl = apps_std_fremove, },
 	{ .def = NULL, .impl = NULL, },
 	{
 		.def = &apps_std_opendir_def,

@@ -261,6 +261,19 @@ int hexagonfs_readdir(struct hexagonfs_fd **fds, int fileno, size_t ent_size, ch
 	return fd->ops->readdir(fd, ent_size, ent);
 }
 
+ssize_t hexagonfs_write(struct hexagonfs_fd **fds, int fileno, size_t size, const void *ptr)
+{
+	struct hexagonfs_fd *fd;
+	if (fileno < 0 || fileno >= HEXAGONFS_MAX_FD)
+		return -EBADF;
+	fd = fds[fileno];
+	if (fd == NULL)
+		return -EBADF;
+	if (fd->ops->write == NULL)
+		return -EROFS;
+	return fd->ops->write(fd, size, ptr);
+}
+
 int hexagonfs_fstat(struct hexagonfs_fd **fds, int fileno, struct stat *stats)
 {
 	struct hexagonfs_fd *fd;

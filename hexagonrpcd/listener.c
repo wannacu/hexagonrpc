@@ -19,12 +19,14 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <errno.h>
 #include <inttypes.h>
 #include <libhexagonrpc/error.h>
 #include <libhexagonrpc/hexagonrpc.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "interface/adsp_listener.h"
 #include "iobuffer.h"
@@ -425,13 +427,16 @@ static int return_for_next_invoke(int fd,
 				  struct fastrpc_io_buffer **decoded)
 {
 	struct fastrpc_decoder_context *ctx;
-	char inbufs[256];
+	char inbufs[4096];
+	char *large_inbufs = NULL;
+	const char *payload = inbufs;
 	char *outbufs = NULL;
 	uint32_t inbufs_len;
 	uint32_t outbufs_len;
 	int ret;
 
-	outbufs_len = outbufs_calculate_size(REMOTE_SCALARS_OUTBUFS(*sc), returned);
+	/* Failed RPCs carry their error code and no output payload. */
+	outbufs_len = result == 0 ? outbufs_calculate_size(REMOTE_SCALARS_OUTBUFS(*sc), returned) : 0;
 
 	if (outbufs_len) {
 		outbufs = malloc(outbufs_len);
@@ -447,7 +452,7 @@ static int return_for_next_invoke(int fd,
 				  *rctx, result,
 				  outbufs_len, outbufs,
 				  rctx, handle, sc,
-				  &inbufs_len, 256, inbufs);
+				  &inbufs_len, sizeof(inbufs), inbufs);
 	if (ret) {
 		if (ret == -1)
 			perror("Could not fetch next FastRPC message");
@@ -457,10 +462,28 @@ static int return_for_next_invoke(int fd,
 		goto err_free_outbufs;
 	}
 
-	if (inbufs_len > 256) {
-		fprintf(stderr, "Large (>256B) input buffers aren't implemented\n");
-		ret = -1;
-		goto err_free_outbufs;
+	if (inbufs_len > sizeof(inbufs)) {
+		uint32_t required;
+		/* Registry updates can exceed the initial buffer. Bound the allocation. */
+		if (inbufs_len > 4 * 1024 * 1024) {
+			ret = -E2BIG;
+			goto err_free_outbufs;
+		}
+		large_inbufs = malloc(inbufs_len);
+		if (large_inbufs == NULL) {
+			ret = -ENOMEM;
+			goto err_free_outbufs;
+		}
+		memcpy(large_inbufs, inbufs, sizeof(inbufs));
+		ret = adsp_listener_get_in_bufs2(fd, *rctx, sizeof(inbufs),
+					       inbufs_len - sizeof(inbufs),
+					       large_inbufs + sizeof(inbufs), &required);
+		if (ret || required > inbufs_len) {
+			if (!ret)
+				ret = -EOVERFLOW;
+			goto err_free_outbufs;
+		}
+		payload = large_inbufs;
 	}
 
 	ctx = inbuf_decode_start(*sc);
@@ -470,7 +493,7 @@ static int return_for_next_invoke(int fd,
 		goto err_free_outbufs;
 	}
 
-	ret = inbuf_decode(ctx, inbufs_len, inbufs);
+	ret = inbuf_decode(ctx, inbufs_len, payload);
 	if (ret) {
 		perror("Could not decode");
 		goto err_free_outbufs;
@@ -485,6 +508,7 @@ static int return_for_next_invoke(int fd,
 	*decoded = inbuf_decode_finish(ctx);
 
 err_free_outbufs:
+	free(large_inbufs);
 	free(outbufs);
 	return ret;
 }
@@ -509,26 +533,26 @@ static int invoke_requested_procedure(size_t n_ifaces,
 	} else {
 		fprintf(stderr, "Expected extended method ID, but got none\n");
 		*result = AEE_EBADPARM;
-		return 1;
+		return 0;
 	}
 
 	if (sc & 0xff) {
 		fprintf(stderr, "Handles are not supported, but got %u in, %u out\n",
 				(sc & 0xf0) >> 4, sc & 0xf);
 		*result = AEE_EBADPARM;
-		return 1;
+		return 0;
 	}
 
 	if (handle >= n_ifaces) {
 		fprintf(stderr, "Unsupported handle: %u\n", handle);
 		*result = AEE_EUNSUPPORTED;
-		return 1;
+		return 0;
 	}
 
 	if (method >= ifaces[handle]->n_procs) {
 		fprintf(stderr, "Unsupported method: %u (%08x)\n", method, sc);
 		*result = AEE_EUNSUPPORTED;
-		return 1;
+		return 0;
 	}
 
 	impl = &ifaces[handle]->procs[method];
@@ -536,7 +560,7 @@ static int invoke_requested_procedure(size_t n_ifaces,
 	if (impl->def == NULL || impl->impl == NULL) {
 		fprintf(stderr, "Unsupported method: %u (%08x)\n", method, sc);
 		*result = AEE_EUNSUPPORTED;
-		return 1;
+		return 0;
 	}
 
 	ret = count_sizes4(impl->def, REMOTE_SCALARS_INBUFS(sc),
@@ -544,7 +568,7 @@ static int invoke_requested_procedure(size_t n_ifaces,
 	if (ret) {
 		fprintf(stderr, "Method invoked with less arguments than expected\n");
 		*result = AEE_EBADPARM;
-		return 1;
+		return 0;
 	}
 
 	*returned = alloc_outbufs4(impl->def, decoded,
@@ -552,7 +576,7 @@ static int invoke_requested_procedure(size_t n_ifaces,
 	if (*returned == NULL && impl->def->n_args > 0) {
 		perror("Could not allocate output buffers");
 		*result = AEE_ENOMEMORY;
-		return 1;
+		return 0;
 	}
 
 	*result = impl->impl(ifaces[handle]->data, decoded, *returned);
@@ -588,6 +612,7 @@ int run_fastrpc_listener(int fd,
 
 		if (returned != NULL)
 			iobuf_free(n_outbufs, returned);
+		returned = NULL;
 
 		ret = invoke_requested_procedure(n_ifaces, ifaces,
 						 handle, sc, &result,

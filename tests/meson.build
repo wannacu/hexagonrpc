@@ -34,3 +34,32 @@ test_hexagonrpc = executable('test_hexagonrpc',
 test('iobuffer', test_iobuffer)
 test('hexagonfs', test_hexagonfs, args : [sample_file])
 test('hexagonrpc', test_hexagonrpc)
+
+test_sensor_registry = executable('test_sensor_registry',
+  'test_sensor_registry.c',
+  '../hexagonrpcd/hexagonfs.c',
+  '../hexagonrpcd/hexagonfs_mapped.c',
+  c_args : cflags,
+  include_directories : include,
+)
+test('sensor-registry', test_sensor_registry)
+
+test_listener_errors = executable('test_listener_errors',
+  'test_listener_errors.c',
+  '../hexagonrpcd/iobuffer.c',
+  '../hexagonrpcd/interface/adsp_listener.c',
+  c_args : cflags,
+  include_directories : include,
+  link_with : libhexagonrpc,
+)
+test('listener-errors', test_listener_errors)
+
+test_listener_large_input = executable('test_listener_large_input',
+  'test_listener_large_input.c',
+  '../hexagonrpcd/iobuffer.c',
+  '../hexagonrpcd/interface/adsp_listener.c',
+  c_args : cflags,
+  include_directories : include,
+  link_with : libhexagonrpc,
+)
+test('listener-large-input', test_listener_large_input)

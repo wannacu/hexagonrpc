@@ -34,6 +34,14 @@ static inline int adsp_listener_init2(int fd)
 }
 
 extern struct hrpc_method_def_interp4 adsp_listener_next2_def;
+extern struct hrpc_method_def_interp4 adsp_listener_get_in_bufs2_def;
+static inline int adsp_listener_get_in_bufs2(int fd, uint32_t ctx, uint32_t offset,
+					   uint32_t size, char *buffer, uint32_t *required)
+{
+	return hexagonrpc(&adsp_listener_get_in_bufs2_def, fd, ADSP_LISTENER,
+			  ctx, offset, required, size, (void *)buffer);
+}
+
 static inline int adsp_listener_next2(int fd,
 				      uint32_t ret_rctx,
 				      uint32_t ret_res,

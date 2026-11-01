@@ -28,6 +28,8 @@
 // These paths are relative, with a prepended '/' if missing from previous segments
 #define ACDBDATA		"/acdb/"
 #define DSP_LIBS		"/dsp/"
+#define ODM_CONFIG "/sensors/odm-config/"
+#define PERSIST_SENSORS "/sensors/persist/"
 #define SENSORS_CONFIG		"/sensors/config/"
 #define SENSORS_REGISTRY	"/sensors/registry/"
 #define SNS_REG_CONFIG		"/sensors/sns_reg.conf"
@@ -111,11 +113,19 @@ static struct hexagonfs_dirent *hfs_map_or_empty(const char *name, const char *p
  */
 struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
 {
-	char *acdbdata, *dsp_libs, *sns_cfg, *sns_reg, *sns_reg_config, *socinfo;
+	char *odm_cfg, *persist_sensors, *acdbdata, *dsp_libs, *sns_cfg, *sns_reg, *sns_reg_config, *socinfo;
 	size_t n_prefix;
 	struct hexagonfs_dirent *persist_dir, *vendor_dir;
 
 	n_prefix = strlen(prefix);
+	odm_cfg = malloc(n_prefix + strlen(ODM_CONFIG) + 1);
+	persist_sensors = malloc(n_prefix + strlen(PERSIST_SENSORS) + 1);
+	if (odm_cfg == NULL || persist_sensors == NULL)
+		return NULL;
+	strcpy(odm_cfg, prefix);
+	strcat(odm_cfg, ODM_CONFIG);
+	strcpy(persist_sensors, prefix);
+	strcat(persist_sensors, PERSIST_SENSORS);
 
 	acdbdata = malloc(n_prefix + strlen(ACDBDATA) + 1);
 	sns_cfg = malloc(n_prefix + strlen(SENSORS_CONFIG) + 1);
@@ -161,12 +171,7 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
 	 * a hard link between both locations.
 	 */
 	persist_dir = hfs_mkdir("persist", 1,
-				hfs_mkdir("sensors", 1,
-					hfs_mkdir("registry", 1,
-						hfs_map("registry", sns_reg)
-					)
-				)
-		      );
+				hfs_map("sensors", persist_sensors));
 
 	/*
 	 * Some platforms need vendor in / and some need it in /system. Form
@@ -182,7 +187,14 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
 				)
 			);
 
-	return hfs_mkdir("/", 6,
+	return hfs_mkdir("/", 7,
+			hfs_mkdir("odm", 1,
+				hfs_mkdir("etc", 1,
+					hfs_mkdir("sensor", 1,
+						hfs_map("config", odm_cfg)
+					)
+				)
+			),
 			hfs_mkdir("mnt", 1,
 				hfs_mkdir("vendor", 1,
 					persist_dir

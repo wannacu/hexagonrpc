@@ -167,6 +167,39 @@ static int mapped_readdir(struct hexagonfs_fd *fd, size_t size, char *out)
 	return 0;
 }
 
+static ssize_t mapped_write(struct hexagonfs_fd *fd, size_t size, const void *ptr)
+{
+	struct mapped_ctx *ctx = fd->data;
+	ssize_t ret = write(ctx->fd, ptr, size);
+	return ret < 0 ? -errno : ret;
+}
+
+int hexagonfs_import_host_fd(struct hexagonfs_fd **fds, int hostfd)
+{
+	struct mapped_ctx *ctx = calloc(1, sizeof(*ctx));
+	struct hexagonfs_fd *fd = calloc(1, sizeof(*fd));
+	int i;
+	if (ctx == NULL || fd == NULL) {
+		close(hostfd);
+		free(ctx);
+		free(fd);
+		return -ENOMEM;
+	}
+	ctx->fd = hostfd;
+	fd->data = ctx;
+	fd->ops = &hexagonfs_mapped_ops;
+	fd->is_assigned = true;
+	for (i = 0; i < HEXAGONFS_MAX_FD; i++) {
+		if (fds[i] == NULL) {
+			fds[i] = fd;
+			return i;
+		}
+	}
+	mapped_close(ctx);
+	free(fd);
+	return -EMFILE;
+}
+
 static int mapped_seek(struct hexagonfs_fd *fd, off_t off, int whence)
 {
 	struct mapped_ctx *ctx = fd->data;
@@ -327,6 +360,7 @@ struct hexagonfs_file_ops hexagonfs_mapped_ops = {
 	.from_dirent = mapped_from_dirent,
 	.openat = mapped_openat,
 	.read = mapped_read,
+	.write = mapped_write,
 	.readdir = mapped_readdir,
 	.seek = mapped_seek,
 	.stat = mapped_stat,
