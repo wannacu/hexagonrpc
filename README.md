@@ -1,3 +1,5 @@
+OPD2513-specific changes and build instructions: [README.OPD2513.md](README.OPD2513.md).
+
 This directory contains a FastRPC ioctl wrapper and a reverse tunnel.
 
 FastRPC is used to communicate with the Context Hub Runtime Environment, a
